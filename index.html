@@ -118,9 +118,24 @@
 
     const configuracao = {
       iceCandidatePoolSize: 10,
+      iceTransportPolicy: "all",
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" },
+        { urls: "stun:stun3.l.google.com:19302" },
+        { urls: "stun:stun.cloudflare.com:3478" },
+        { urls: "stun:stun.relay.metered.ca:80" },
+        {
+          urls: [
+            "turn:a.relay.metered.ca:80",
+            "turn:a.relay.metered.ca:80?transport=tcp",
+            "turn:a.relay.metered.ca:443",
+            "turns:a.relay.metered.ca:443"
+          ],
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        },
         {
           urls: [
             "turn:openrelay.metered.ca:80",
@@ -380,27 +395,63 @@
 
       conexaoP2P.onicecandidate = (e) => {
         if (e.candidate) {
+          const tipo = e.candidate.type || "?";
+          adicionarLog("ICE candidato: " + tipo);
           enviarDados({
             tipo: "candidate",
             de: PEER_ID,
             candidate: e.candidate.toJSON()
           });
+        } else {
+          adicionarLog("ICE coleta finalizada");
         }
       };
 
       conexaoP2P.oniceconnectionstatechange = () => {
-        adicionarLog("ICE: " + conexaoP2P.iceConnectionState);
-        if (conexaoP2P.iceConnectionState === "connected" || conexaoP2P.iceConnectionState === "completed") {
+        const estado = conexaoP2P.iceConnectionState;
+        adicionarLog("ICE: " + estado);
+        if (estado === "connected" || estado === "completed") {
           atualizarStatus("CONECTADO!", "conectado");
-        } else if (conexaoP2P.iceConnectionState === "failed") {
-          atualizarStatus("Falha na conexao P2P - tente novamente", "desconectado");
-        } else if (conexaoP2P.iceConnectionState === "disconnected") {
+        } else if (estado === "failed") {
+          adicionarLog("ICE falhou - tentando ICE restart...");
+          atualizarStatus("Reconectando P2P...", "conectando");
+          negociando = false;
+          descricaoRemotaDefinida = false;
+          candidatosPendentes.length = 0;
+          if (souCriador && conexaoP2P) {
+            conexaoP2P.createOffer({ iceRestart: true })
+              .then(o => conexaoP2P.setLocalDescription(o))
+              .then(() => enviarDados({
+                tipo: "oferta",
+                de: PEER_ID,
+                sdp: { type: conexaoP2P.localDescription.type, sdp: conexaoP2P.localDescription.sdp }
+              }))
+              .catch(e => adicionarLog("Erro ICE restart: " + e.message));
+          }
+        } else if (estado === "disconnected") {
+          adicionarLog("ICE desconectado - aguardando recuperacao...");
           atualizarStatus("Conexao instavel...", "conectando");
         }
       };
 
+      conexaoP2P.onicegatheringstatechange = () => {
+        adicionarLog("ICE gather: " + conexaoP2P.iceGatheringState);
+      };
+
       conexaoP2P.onconnectionstatechange = () => {
-        adicionarLog("P2P: " + conexaoP2P.connectionState);
+        const estado = conexaoP2P.connectionState;
+        adicionarLog("P2P: " + estado);
+        if (estado === "failed") {
+          adicionarLog("Conexao P2P falhou - reiniciando...");
+          negociando = false;
+          conexaoP2P.close();
+          conexaoP2P = null;
+          descricaoRemotaDefinida = false;
+          candidatosPendentes.length = 0;
+          if (souCriador) {
+            setTimeout(() => iniciarNegociacao(), 2000);
+          }
+        }
       };
 
       if (souCriador) {
