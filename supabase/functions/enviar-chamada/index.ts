@@ -13,7 +13,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { host_user_id, sala } = await req.json();
+    const { host_user_id, sala, nome_chamador } = await req.json();
 
     if (!host_user_id || !sala) {
       return new Response(
@@ -48,7 +48,7 @@ Deno.serve(async (req: Request) => {
 
     await webpush.sendNotification(
       sub.subscription,
-      JSON.stringify({ sala, tipo: "chamada" })
+      JSON.stringify({ sala, tipo: "chamada", nome: nome_chamador || "Alguem" })
     );
 
     return new Response(

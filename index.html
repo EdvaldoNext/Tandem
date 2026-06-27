@@ -60,6 +60,14 @@
       <p class="header-tagline">A um clique de distância, uma conexão direta.</p>
     </div>
 
+    <div class="contacts-box">
+      <div class="contacts-header">
+        <h2>Contatos</h2>
+        <button onclick="compartilharConvite()" class="btn-outline">+ Compartilhar meu contato</button>
+      </div>
+      <div id="listaContatos" class="contacts-list"></div>
+    </div>
+
     <div class="room-box">
       <h2>Entrar ou Criar Sala</h2>
       <input type="text" id="roomCode" placeholder="Código da Sala" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -67,7 +75,11 @@
         <button onclick="criarSala()" class="btn-primary">Gerar Código</button>
         <button onclick="entrarSala()" class="btn-primary">Entrar</button>
       </div>
-      <div id="linkCompartilhar">🔗 Link para enviar: <span id="linkTexto"></span></div>
+      <div id="linkCompartilhar">
+        <span class="link-label">🔗 Link para enviar:</span>
+        <span id="linkTexto"></span>
+        <button id="btnCopiarLink" class="btn-copy" onclick="copiarLink()" title="Copiar link">Copiar</button>
+      </div>
     </div>
 
     <div id="statusConexao" class="status desconectado">Aguardando código...</div>
@@ -110,6 +122,8 @@
       MEU_USER_ID = crypto.randomUUID();
       localStorage.setItem("tandem_user_id", MEU_USER_ID);
     }
+
+    let MEU_NOME = localStorage.getItem("tandem_nome") || "";
 
     const PEER_ID = crypto.randomUUID();
     let localStream;
@@ -189,13 +203,38 @@
         adicionarLog("AVISO: Supabase inacessivel via HTTP - " + e.message);
       }
 
+      if (!MEU_NOME) {
+        const nome = prompt("Bem-vindo ao Tandem!\nQual e o seu nome? (usado para identificar chamadas)");
+        MEU_NOME = (nome || "Usuario").trim();
+        localStorage.setItem("tandem_nome", MEU_NOME);
+      }
+      renderizarContatos();
+
       if ("serviceWorker" in navigator) {
         await navigator.serviceWorker.register("service-worker.js").catch(() => {});
       }
       await registrarPush();
 
       const parametroUrl = new URLSearchParams(window.location.search);
-      if (parametroUrl.get("sala")) {
+
+      if (parametroUrl.get("convite")) {
+        const convidadoId = parametroUrl.get("convite");
+        const convidadoNome = decodeURIComponent(parametroUrl.get("nome") || "Desconhecido");
+        const aceitar = confirm(`Adicionar "${convidadoNome}" como contato?`);
+        if (aceitar) {
+          const contatos = JSON.parse(localStorage.getItem("tandem_contatos") || "[]");
+          const jaExiste = contatos.some((c) => c.userId === convidadoId);
+          if (!jaExiste) {
+            contatos.push({ nome: convidadoNome, userId: convidadoId });
+            localStorage.setItem("tandem_contatos", JSON.stringify(contatos));
+            adicionarLog("Contato adicionado: " + convidadoNome);
+          } else {
+            adicionarLog("Contato ja existe: " + convidadoNome);
+          }
+          renderizarContatos();
+        }
+        history.replaceState(null, "", window.location.pathname);
+      } else if (parametroUrl.get("sala")) {
         codigoSala = parametroUrl.get("sala");
         document.getElementById("roomCode").value = codigoSala;
         const hostId = parametroUrl.get("host");
@@ -226,7 +265,7 @@
 
       const linkCompleto = `${window.location.origin}${window.location.pathname}?sala=${codigoSala}&host=${MEU_USER_ID}`;
       document.getElementById("linkTexto").innerText = linkCompleto;
-      document.getElementById("linkCompartilhar").style.display = "block";
+      document.getElementById("linkCompartilhar").style.display = "flex";
 
       adicionarLog("Sala criada: " + codigoSala);
       atualizarStatus("Sala criada - aguardando parceiro...", "conectando");
@@ -546,6 +585,87 @@
       if (localStream) localStream.getTracks().forEach((t) => t.stop());
       if (canalTempoReal) supabaseClient.removeChannel(canalTempoReal);
       location.reload();
+    }
+
+    function copiarLink() {
+      const link = document.getElementById("linkTexto").innerText;
+      if (!link) return;
+      navigator.clipboard.writeText(link).then(() => {
+        const btn = document.getElementById("btnCopiarLink");
+        btn.innerText = "Copiado!";
+        setTimeout(() => { btn.innerText = "Copiar"; }, 2000);
+      }).catch(() => {
+        prompt("Copie o link abaixo:", link);
+      });
+    }
+
+    function renderizarContatos() {
+      const lista = document.getElementById("listaContatos");
+      const contatos = JSON.parse(localStorage.getItem("tandem_contatos") || "[]");
+      if (contatos.length === 0) {
+        lista.innerHTML = '<p class="contacts-empty">Nenhum contato. Compartilhe seu link para adicionar.</p>';
+        return;
+      }
+      lista.innerHTML = contatos.map((c, i) => `
+        <div class="contact-card">
+          <div class="contact-avatar">${c.nome.charAt(0).toUpperCase()}</div>
+          <span class="contact-name">${c.nome}</span>
+          <button class="btn-call" onclick="ligarParaContato(${i})">Ligar</button>
+          <button class="btn-remove" onclick="removerContato(${i})" title="Remover">x</button>
+        </div>
+      `).join("");
+    }
+
+    function compartilharConvite() {
+      const nomeEncoded = encodeURIComponent(MEU_NOME);
+      const link = `${window.location.origin}${window.location.pathname}?convite=${MEU_USER_ID}&nome=${nomeEncoded}`;
+      navigator.clipboard.writeText(link).then(() => {
+        alert("Link copiado!\nEnvie para a pessoa que deseja adicionar como contato.");
+      }).catch(() => {
+        prompt("Copie o link abaixo:", link);
+      });
+    }
+
+    function removerContato(indice) {
+      const contatos = JSON.parse(localStorage.getItem("tandem_contatos") || "[]");
+      const nome = contatos[indice]?.nome;
+      if (confirm(`Remover "${nome}" dos contatos?`)) {
+        contatos.splice(indice, 1);
+        localStorage.setItem("tandem_contatos", JSON.stringify(contatos));
+        renderizarContatos();
+      }
+    }
+
+    async function ligarParaContato(indice) {
+      const contatos = JSON.parse(localStorage.getItem("tandem_contatos") || "[]");
+      const contato = contatos[indice];
+      if (!contato) return;
+
+      const ids = [MEU_USER_ID, contato.userId].sort();
+      codigoSala = "tandem-" + ids[0].slice(0, 8) + "-" + ids[1].slice(0, 8);
+      souCriador = true;
+      document.getElementById("roomCode").value = codigoSala;
+
+      adicionarLog("Ligando para " + contato.nome + "...");
+      atualizarStatus("Aguardando " + contato.nome + "...", "conectando");
+
+      await iniciarMidia();
+      await iniciarCanalTempoReal();
+      await notificarContato(contato.userId, codigoSala, MEU_NOME);
+    }
+
+    async function notificarContato(contatoUserId, sala, nomeChamador) {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/enviar-chamada`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "apikey": SUPABASE_KEY },
+          body: JSON.stringify({ host_user_id: contatoUserId, sala, nome_chamador: nomeChamador })
+        });
+        const data = await res.json();
+        adicionarLog(data.ok ? "Notificacao enviada!" : "Push falhou: " + (data.error || "erro"));
+      } catch (e) {
+        adicionarLog("Erro ao notificar: " + e.message);
+      }
     }
 
     async function registrarPush() {

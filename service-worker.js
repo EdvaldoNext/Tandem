@@ -7,8 +7,9 @@ self.addEventListener("push", (event) => {
   }
 
   const sala = dados.sala || "";
+  const nome = dados.nome || "Alguem";
   const opcoes = {
-    body: "Alguem esta te chamando! Toque para atender.",
+    body: `Chamada de ${nome}. Toque para atender.`,
     icon: "/favicon.svg",
     badge: "/favicon.svg",
     vibrate: [300, 150, 300, 150, 300, 150, 400],
