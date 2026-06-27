@@ -1,0 +1,108 @@
+# Melhorias futuras — Tandem
+
+> Anotações de ideias para implementar depois.  
+> **Não implementar sem autorização explícita.**
+
+---
+
+## 1. Login / acesso restrito
+
+**Objetivo:** Somente usuários autenticados podem usar o Tandem.
+
+**Ideias:**
+- Tela de login antes de acessar salas (criar/entrar).
+- Possível integração com Supabase Auth (e-mail, OAuth, etc.).
+- Bloquear ou redirecionar quem não estiver logado.
+- Definir: cadastro aberto ou só convite?
+
+**Pendências a decidir:**
+- [ ] Método de login (e-mail/senha, Google, magic link…)
+- [ ] Sessão persistente (lembrar usuário)
+- [ ] Política de privacidade / termos
+
+---
+
+## 2. Copiar link com um clique
+
+**Objetivo:** Ao clicar em **Gerar Código**, o link exibido embaixo deve ser copiado automaticamente (ou com um botão “Copiar” de um clique).
+
+**Ideias:**
+- Usar `navigator.clipboard.writeText()` após gerar o link.
+- Feedback visual: “Link copiado!” (toast ou texto temporário).
+- Fallback para navegadores/mobile que não suportam clipboard API.
+
+**Pendências a decidir:**
+- [ ] Copiar automaticamente ao gerar ou só ao clicar em “Copiar”?
+- [ ] Copiar link completo (`?sala=...`) ou só o código?
+
+---
+
+## 3. Enviar código/link para a pessoa
+
+**Objetivo:** Facilitar convidar alguém para a sala sem copiar/colar manualmente.
+
+**Ideias:**
+- Botão **Compartilhar** usando Web Share API (`navigator.share`) no mobile.
+- Opções: WhatsApp, Telegram, e-mail, SMS (via `share` ou links `https://wa.me/?text=...`).
+- Enviar link completo ou só o código, conforme o canal.
+
+**Pendências a decidir:**
+- [ ] Um botão “Compartilhar” genérico ou vários atalhos (WhatsApp, etc.)?
+- [ ] Mensagem padrão ao compartilhar (“Entre na minha sala Tandem: …”)
+
+---
+
+## 4. Service Worker — toque como chamada no Android
+
+**Objetivo:** Quando alguém receber convite/chamada, o Android tocar e vibrar como ligação de celular.
+
+**Situação atual:**
+- `service-worker.js` existe e escuta `push`, mas não está totalmente integrado com a página.
+- `localStorage` no SW é simulado — não sincroniza com a app.
+- Falta fluxo que dispare push quando parceiro entra ou “chama”.
+
+**Ideias:**
+- Integrar **Web Push** (VAPID keys, subscription no backend ou Supabase).
+- Ao guest entrar na sala, notificar o host (push).
+- Notificação com som, vibração e `tag`/`renotify` (já esboçado no SW).
+- Ao clicar na notificação, abrir `?sala=CODIGO` correto.
+- Android: permissões de notificação + canal de alta prioridade; testar em PWA instalada.
+
+**Pendências a decidir:**
+- [ ] Quem dispara o push (Supabase Edge Function, outro backend)?
+- [ ] Host precisa aceitar notificações antes de criar sala?
+- [ ] Comportamento iOS (limitações de push em PWA)
+
+---
+---
+
+## 5. Painel admin — salas em uso e acessos
+
+**Objetivo:** Login de administrador para acompanhar uso do Tandem: quantas salas estão ativas, horário e ID de quem acessou.
+
+**Ideias:**
+- Área `/admin` (ou página separada) com login exclusivo para admins.
+- Dashboard com:
+  - **Salas em uso agora** (contagem em tempo real)
+  - **Código/ID de cada sala** ativa
+  - **Horário** de criação da sala e de cada entrada/saída
+  - **ID do usuário** que acessou (ex.: `PEER_ID`, ou ID do Supabase Auth quando existir login normal)
+  - Papel na sala: host (criador) ou guest (convidado)
+- Registrar eventos no **Supabase** (tabela `salas` / `acessos`):
+  - sala criada, usuário entrou, usuário saiu, sala encerrada
+- Atualização em tempo real (Supabase Realtime ou polling no painel).
+- Proteger rotas e API com **RLS** + role `admin` (não expor dados sensíveis no front comum).
+
+**Pendências a decidir:**
+- [ ] Quem pode ser admin (lista fixa de e-mails, role no Supabase Auth)?
+- [ ] Retenção dos logs (quantos dias guardar?)
+- [ ] Mostrar só metadados (sala, hora, ID) — **sem** conteúdo de vídeo/chat (já é P2P)
+- [ ] Considerar LGPD: avisar usuários que acessos são registrados?
+
+**Relacionado:** item 1 (login de usuários) — com Auth, o “ID de quem acessou” pode ser e-mail/user_id em vez de só `PEER_ID` anônimo.
+
+## Histórico de anotações
+
+| Data       | Nota                                      |
+|------------|-------------------------------------------|
+| 2026-05-27 | Lista inicial: login, copiar link, compartilhar, SW Android |

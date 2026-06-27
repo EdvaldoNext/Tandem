@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1E1B4B">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Tandem — streaming P2P com áudio, vídeo e chat em tempo real.">
+  <title>Tandem — P2P Streaming</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="styles.css">
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo-wrap">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 150" width="100%" height="100%" aria-label="Tandem P2P Streaming">
+          <defs>
+            <linearGradient id="nodeGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#6366F1"/>
+              <stop offset="100%" stop-color="#4F46E5"/>
+            </linearGradient>
+            <linearGradient id="nodeGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#06B6D4"/>
+              <stop offset="100%" stop-color="#0D9488"/>
+            </linearGradient>
+            <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#E2E8F0"/>
+              <stop offset="100%" stop-color="#A5B4FC"/>
+            </linearGradient>
+            <filter id="softShadow" x="-10%" y="-10%" width="130%" height="130%">
+              <feDropShadow dx="2" dy="4" stdDeviation="4" flood-opacity="0.15"/>
+            </filter>
+          </defs>
+          <g filter="url(#softShadow)">
+            <path d="M 40,45 C 40,25 65,25 75,45 L 95,85 C 105,105 130,105 130,85 L 130,45 C 130,25 105,25 95,45 Z"
+                  fill="url(#nodeGrad1)" opacity="0.9"/>
+            <path d="M 130,105 C 130,125 105,125 95,105 L 75,65 C 65,45 40,45 40,65 L 40,105 C 40,125 65,125 75,105 Z"
+                  fill="url(#nodeGrad2)" opacity="0.9" style="mix-blend-mode:multiply;"/>
+            <circle cx="85" cy="75" r="8" fill="#FFFFFF"/>
+          </g>
+          <text x="165" y="88"
+                font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+                font-size="54"
+                font-weight="800"
+                letter-spacing="-1px"
+                fill="url(#textGrad)">Tandem</text>
+          <text x="168" y="112"
+                font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+                font-size="14"
+                font-weight="600"
+                letter-spacing="4px"
+                fill="#0D9488">P2P STREAMING</text>
+        </svg>
+      </div>
+      <p class="header-tagline">A um clique de distância, uma conexão direta.</p>
+    </div>
+
+    <div class="room-box">
+      <h2>Entrar ou Criar Sala</h2>
+      <input type="text" id="roomCode" placeholder="Código da Sala" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="room-actions">
+        <button onclick="criarSala()" class="btn-primary">Gerar Código</button>
+        <button onclick="entrarSala()" class="btn-primary">Entrar</button>
+      </div>
+      <div id="linkCompartilhar">🔗 Link para enviar: <span id="linkTexto"></span></div>
+    </div>
+
+    <div id="statusConexao" class="status desconectado">Aguardando código...</div>
+
+    <div class="log-area" id="logTela">LOG DE SISTEMA:<br></div>
+
+    <div class="video-grid">
+      <div class="video-container local-preview">
+        <p>Tela: 1</p>
+        <video id="localVideo" autoplay playsinline muted></video>
+      </div>
+      <div class="video-container">
+        <p>Tela: 2</p>
+        <video id="remoteVideo" autoplay playsinline></video>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="btnAudio" onclick="alternarAudio()" class="btn-primary"> Áudio: ON</button>
+      <button id="btnVideo" onclick="alternarVideo()" class="btn-primary"> Vídeo: ON</button>
+      <input type="checkbox" id="ocultarMinhaTela" class="local-preview-toggle">
+      <label for="ocultarMinhaTela" class="local-preview-btn"></label>
+      <button onclick="desligarChamada()" class="btn-danger"> Desligar</button>
+    </div>
+
+    <div class="chat-area" id="mensagensChat"></div>
+    <div class="chat-input-area">
+      <input type="text" id="textoMensagem" placeholder="Digite sua mensagem..." onkeypress="if(event.key === 'Enter') enviarMensagem()">
+      <button onclick="enviarMensagem()" class="btn-primary">Enviar</button>
+    </div>
+  </div>
+
+  <script>
+    const SUPABASE_URL = "https://epijxziihqnhwghiuuej.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_jhEJpUlCTOX6sDsyn5_z_w_6iLEoHFs";
+
+    const PEER_ID = crypto.randomUUID();
+    let localStream;
+    let conexaoP2P;
+    let canalDados;
+    let codigoSala = "";
+    let souCriador = false;
+    let supabaseClient;
+    let canalTempoReal;
+    let negociando = false;
+    let descricaoRemotaDefinida = false;
+    const candidatosPendentes = [];
+
+    const configuracao = {
+      iceCandidatePoolSize: 10,
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        {
+          urls: [
+            "turn:openrelay.metered.ca:80",
+            "turn:openrelay.metered.ca:443",
+            "turn:openrelay.metered.ca:443?transport=tcp"
+          ],
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        }
+      ]
+    };
+
+    const localVideo = document.getElementById("localVideo");
+    const remoteVideo = document.getElementById("remoteVideo");
+    const statusTexto = document.getElementById("statusConexao");
+    const logTela = document.getElementById("logTela");
+
+    function adicionarLog(texto) {
+      logTela.innerHTML += "> " + texto + "<br>";
+      logTela.scrollTop = logTela.scrollHeight;
+    }
+
+    function atualizarStatus(texto, classe) {
+      statusTexto.innerText = texto;
+      statusTexto.className = "status " + classe;
+    }
+
+    window.onload = async () => {
+      adicionarLog("Sistema iniciado (peer: " + PEER_ID.slice(0, 8) + "...)");
+
+      supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+        realtime: {
+          timeout: 30000,
+          heartbeatIntervalMs: 15000
+        }
+      });
+
+      try {
+        const res = await fetch(SUPABASE_URL + "/rest/v1/", {
+          headers: { "apikey": SUPABASE_KEY }
+        });
+        adicionarLog("Supabase OK (HTTP " + res.status + ")");
+      } catch (e) {
+        adicionarLog("AVISO: Supabase inacessivel via HTTP - " + e.message);
+      }
+
+      const parametroUrl = new URLSearchParams(window.location.search);
+      if (parametroUrl.get("sala")) {
+        codigoSala = parametroUrl.get("sala");
+        document.getElementById("roomCode").value = codigoSala;
+        adicionarLog("Entrando automaticamente: " + codigoSala);
+        entrarSala();
+      }
+
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("service-worker.js").catch(() => {});
+      }
+    };
+
+    async function iniciarMidia() {
+      try {
+        adicionarLog("Solicitando câmera e microfone...");
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true
+        });
+        localVideo.srcObject = localStream;
+        adicionarLog("Midia local OK");
+      } catch (erro) {
+        adicionarLog("Erro midia: " + erro.message + " (continuando sem camera)");
+      }
+    }
+
+    async function criarSala() {
+      codigoSala = "sala-" + Math.random().toString(36).substr(2, 9);
+      document.getElementById("roomCode").value = codigoSala;
+      souCriador = true;
+
+      const linkCompleto = `${window.location.origin}${window.location.pathname}?sala=${codigoSala}`;
+      document.getElementById("linkTexto").innerText = linkCompleto;
+      document.getElementById("linkCompartilhar").style.display = "block";
+
+      adicionarLog("Sala criada: " + codigoSala);
+      atualizarStatus("Sala criada - aguardando parceiro...", "conectando");
+
+      await iniciarMidia();
+      await iniciarCanalTempoReal();
+    }
+
+    async function entrarSala() {
+      codigoSala = document.getElementById("roomCode").value.trim();
+      if (!codigoSala) return alert("Digite um codigo de sala!");
+
+      souCriador = false;
+      adicionarLog("Entrando na sala: " + codigoSala);
+      atualizarStatus("Conectando a sala...", "conectando");
+
+      await iniciarMidia();
+      await iniciarCanalTempoReal();
+    }
+
+    let tentativasCanal = 0;
+    const MAX_TENTATIVAS = 5;
+
+    async function iniciarCanalTempoReal() {
+      if (!codigoSala) return;
+
+      if (canalTempoReal) {
+        await supabaseClient.removeChannel(canalTempoReal);
+        canalTempoReal = null;
+      }
+
+      tentativasCanal++;
+      adicionarLog("Conectando canal... (tentativa " + tentativasCanal + ")");
+
+      canalTempoReal = supabaseClient.channel("sala:" + codigoSala, {
+        config: {
+          broadcast: { self: false, ack: false },
+          presence: { key: PEER_ID }
+        }
+      });
+
+      canalTempoReal
+        .on("broadcast", { event: "dados" }, (payload) => {
+          processarSinal(payload.payload).catch((e) => {
+            adicionarLog("Erro sinal: " + e.message);
+          });
+        })
+        .on("presence", { event: "sync" }, () => {
+          const usuarios = Object.keys(canalTempoReal.presenceState());
+          adicionarLog("Usuarios na sala: " + usuarios.length);
+          if (souCriador && usuarios.length >= 2) {
+            iniciarNegociacao();
+          }
+        })
+        .subscribe(async (status, err) => {
+          if (status === "SUBSCRIBED") {
+            tentativasCanal = 0;
+            adicionarLog("Canal Supabase conectado!");
+            atualizarStatus("Canal conectado - aguardando parceiro...", "conectando");
+            await canalTempoReal.track({ role: souCriador ? "host" : "guest" });
+            if (!souCriador) {
+              await enviarDados({ tipo: "join", de: PEER_ID });
+            }
+          } else if (status === "CHANNEL_ERROR") {
+            const msg = err ? (err.message || JSON.stringify(err)) : "sem detalhes";
+            const causa = err?.cause ? " | causa: " + String(err.cause) : "";
+            adicionarLog("CHANNEL_ERROR: " + msg + causa);
+            if (tentativasCanal < MAX_TENTATIVAS) {
+              const espera = tentativasCanal * 3000;
+              atualizarStatus("Erro canal - nova tentativa em " + (espera/1000) + "s...", "conectando");
+              setTimeout(() => iniciarCanalTempoReal(), espera);
+            } else {
+              atualizarStatus("Falha ao conectar ao Supabase - verifique o console", "desconectado");
+              adicionarLog("Max tentativas atingido. Verifique a rede ou as credenciais.");
+            }
+          } else if (status === "TIMED_OUT") {
+            adicionarLog("Canal Supabase: TIMED_OUT (tentativa " + tentativasCanal + ")");
+            if (tentativasCanal < MAX_TENTATIVAS) {
+              setTimeout(() => iniciarCanalTempoReal(), 5000);
+            } else {
+              atualizarStatus("Timeout persistente - verifique sua conexao", "desconectado");
+            }
+          } else if (status === "CLOSED") {
+            adicionarLog("Canal Supabase fechado");
+          }
+        });
+    }
+
+    async function enviarDados(dados) {
+      if (!canalTempoReal) return;
+      const status = await canalTempoReal.send({
+        type: "broadcast",
+        event: "dados",
+        payload: dados
+      });
+      if (status !== "ok") {
+        adicionarLog("Falha ao enviar sinal: " + status);
+      }
+    }
+
+    async function processarSinal(dados) {
+      if (!dados || dados.de === PEER_ID) return;
+
+      adicionarLog("Recebido: " + (dados.tipo || "candidate"));
+
+      if (dados.tipo === "join" && souCriador) {
+        await iniciarNegociacao();
+        return;
+      }
+
+      await garantirConexaoP2P();
+
+      if (dados.tipo === "oferta") {
+        await conexaoP2P.setRemoteDescription(new RTCSessionDescription(dados.sdp));
+        descricaoRemotaDefinida = true;
+        await processarCandidatosPendentes();
+
+        const resposta = await conexaoP2P.createAnswer();
+        await conexaoP2P.setLocalDescription(resposta);
+        await enviarDados({
+          tipo: "resposta",
+          de: PEER_ID,
+          sdp: { type: resposta.type, sdp: resposta.sdp }
+        });
+        return;
+      }
+
+      if (dados.tipo === "resposta") {
+        await conexaoP2P.setRemoteDescription(new RTCSessionDescription(dados.sdp));
+        descricaoRemotaDefinida = true;
+        await processarCandidatosPendentes();
+        return;
+      }
+
+      if (dados.tipo === "candidate" && dados.candidate) {
+        const candidato = new RTCIceCandidate(dados.candidate);
+        if (descricaoRemotaDefinida && conexaoP2P.remoteDescription) {
+          await conexaoP2P.addIceCandidate(candidato);
+        } else {
+          candidatosPendentes.push(candidato);
+        }
+      }
+    }
+
+    async function processarCandidatosPendentes() {
+      while (candidatosPendentes.length) {
+        const candidato = candidatosPendentes.shift();
+        try {
+          await conexaoP2P.addIceCandidate(candidato);
+        } catch (e) {
+          adicionarLog("Candidato ICE ignorado: " + e.message);
+        }
+      }
+    }
+
+    async function garantirConexaoP2P() {
+      if (conexaoP2P) return;
+
+      adicionarLog("Criando conexao P2P...");
+      conexaoP2P = new RTCPeerConnection(configuracao);
+
+      if (localStream) {
+        localStream.getTracks().forEach((track) => {
+          conexaoP2P.addTrack(track, localStream);
+        });
+      } else {
+        conexaoP2P.addTransceiver("video", { direction: "sendrecv" });
+        conexaoP2P.addTransceiver("audio", { direction: "sendrecv" });
+      }
+
+      conexaoP2P.ontrack = (e) => {
+        if (e.streams && e.streams[0]) {
+          remoteVideo.srcObject = e.streams[0];
+        }
+      };
+
+      conexaoP2P.onicecandidate = (e) => {
+        if (e.candidate) {
+          enviarDados({
+            tipo: "candidate",
+            de: PEER_ID,
+            candidate: e.candidate.toJSON()
+          });
+        }
+      };
+
+      conexaoP2P.oniceconnectionstatechange = () => {
+        adicionarLog("ICE: " + conexaoP2P.iceConnectionState);
+        if (conexaoP2P.iceConnectionState === "connected" || conexaoP2P.iceConnectionState === "completed") {
+          atualizarStatus("CONECTADO!", "conectado");
+        } else if (conexaoP2P.iceConnectionState === "failed") {
+          atualizarStatus("Falha na conexao P2P - tente novamente", "desconectado");
+        } else if (conexaoP2P.iceConnectionState === "disconnected") {
+          atualizarStatus("Conexao instavel...", "conectando");
+        }
+      };
+
+      conexaoP2P.onconnectionstatechange = () => {
+        adicionarLog("P2P: " + conexaoP2P.connectionState);
+      };
+
+      if (souCriador) {
+        canalDados = conexaoP2P.createDataChannel("chat");
+        configurarCanalTexto();
+      } else {
+        conexaoP2P.ondatachannel = (e) => {
+          canalDados = e.channel;
+          configurarCanalTexto();
+        };
+      }
+    }
+
+    async function iniciarNegociacao() {
+      if (!souCriador || negociando) return;
+      negociando = true;
+
+      try {
+        await garantirConexaoP2P();
+        adicionarLog("Enviando oferta WebRTC...");
+        const offer = await conexaoP2P.createOffer();
+        await conexaoP2P.setLocalDescription(offer);
+        await enviarDados({
+          tipo: "oferta",
+          de: PEER_ID,
+          sdp: { type: offer.type, sdp: offer.sdp }
+        });
+      } catch (e) {
+        negociando = false;
+        adicionarLog("Erro ao negociar: " + e.message);
+      }
+    }
+
+    function configurarCanalTexto() {
+      if (!canalDados) return;
+      canalDados.onopen = () => adicionarLog("Chat aberto!");
+      canalDados.onmessage = (e) => adicionarMensagemTela("them", e.data);
+    }
+
+    function enviarMensagem() {
+      if (!canalDados || canalDados.readyState !== "open") return alert("Chat nao conectado");
+      const input = document.getElementById("textoMensagem");
+      const texto = input.value.trim();
+      if (texto) {
+        canalDados.send(texto);
+        adicionarMensagemTela("me", texto);
+        input.value = "";
+      }
+    }
+
+    function adicionarMensagemTela(tipo, texto) {
+      const chat = document.getElementById("mensagensChat");
+      const div = document.createElement("div");
+      div.className = "message " + tipo;
+      div.innerHTML = "<strong>" + (tipo === "me" ? "Voce" : "Parceiro") + ":</strong> " + texto;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function alternarAudio() {
+      if (!localStream) return;
+      const track = localStream.getAudioTracks()[0];
+      if (!track) return;
+      track.enabled = !track.enabled;
+      document.getElementById("btnAudio").innerText = track.enabled ? "Audio: ON" : "Audio: OFF";
+    }
+
+    function alternarVideo() {
+      if (!localStream) return;
+      const track = localStream.getVideoTracks()[0];
+      if (!track) return;
+      track.enabled = !track.enabled;
+      document.getElementById("btnVideo").innerText = track.enabled ? "Video: ON" : "Video: OFF";
+    }
+
+    function desligarChamada() {
+      if (conexaoP2P) conexaoP2P.close();
+      if (localStream) localStream.getTracks().forEach((t) => t.stop());
+      if (canalTempoReal) supabaseClient.removeChannel(canalTempoReal);
+      location.reload();
+    }
+  </script>
+</body>
+</html>
