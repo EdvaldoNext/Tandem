@@ -103,6 +103,13 @@
   <script>
     const SUPABASE_URL = "https://epijxziihqnhwghiuuej.supabase.co";
     const SUPABASE_KEY = "sb_publishable_jhEJpUlCTOX6sDsyn5_z_w_6iLEoHFs";
+    const VAPID_PUBLIC_KEY = "BD9mfGMiW6uim_41FwYPNBEQ22bVcfsoHhHWmeetqaEziBm4RuHsvqHxmN7JC2gPWA7Rhfohg3I3SD5laUyZvC8";
+
+    let MEU_USER_ID = localStorage.getItem("tandem_user_id");
+    if (!MEU_USER_ID) {
+      MEU_USER_ID = crypto.randomUUID();
+      localStorage.setItem("tandem_user_id", MEU_USER_ID);
+    }
 
     const PEER_ID = crypto.randomUUID();
     let localStream;
@@ -182,16 +189,19 @@
         adicionarLog("AVISO: Supabase inacessivel via HTTP - " + e.message);
       }
 
+      if ("serviceWorker" in navigator) {
+        await navigator.serviceWorker.register("service-worker.js").catch(() => {});
+      }
+      await registrarPush();
+
       const parametroUrl = new URLSearchParams(window.location.search);
       if (parametroUrl.get("sala")) {
         codigoSala = parametroUrl.get("sala");
         document.getElementById("roomCode").value = codigoSala;
+        const hostId = parametroUrl.get("host");
+        if (hostId) window._hostParaNotificar = hostId;
         adicionarLog("Entrando automaticamente: " + codigoSala);
         entrarSala();
-      }
-
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("service-worker.js").catch(() => {});
       }
     };
 
@@ -214,7 +224,7 @@
       document.getElementById("roomCode").value = codigoSala;
       souCriador = true;
 
-      const linkCompleto = `${window.location.origin}${window.location.pathname}?sala=${codigoSala}`;
+      const linkCompleto = `${window.location.origin}${window.location.pathname}?sala=${codigoSala}&host=${MEU_USER_ID}`;
       document.getElementById("linkTexto").innerText = linkCompleto;
       document.getElementById("linkCompartilhar").style.display = "block";
 
@@ -268,6 +278,7 @@
           const usuarios = Object.keys(canalTempoReal.presenceState());
           adicionarLog("Usuarios na sala: " + usuarios.length);
           if (souCriador && usuarios.length >= 2) {
+            tocarSomChamada();
             iniciarNegociacao();
           }
         })
@@ -279,6 +290,9 @@
             await canalTempoReal.track({ role: souCriador ? "host" : "guest" });
             if (!souCriador) {
               await enviarDados({ tipo: "join", de: PEER_ID });
+              if (window._hostParaNotificar) {
+                notificarHost(window._hostParaNotificar, codigoSala);
+              }
             }
           } else if (status === "CHANNEL_ERROR") {
             const msg = err ? (err.message || JSON.stringify(err)) : "sem detalhes";
@@ -532,6 +546,77 @@
       if (localStream) localStream.getTracks().forEach((t) => t.stop());
       if (canalTempoReal) supabaseClient.removeChannel(canalTempoReal);
       location.reload();
+    }
+
+    async function registrarPush() {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+      try {
+        const permissao = await Notification.requestPermission();
+        if (permissao !== "granted") {
+          adicionarLog("Permissao de notificacao negada");
+          return;
+        }
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+          });
+        }
+        await supabaseClient.from("push_subscriptions").upsert({
+          user_id: MEU_USER_ID,
+          subscription: sub.toJSON(),
+          updated_at: new Date().toISOString()
+        });
+        adicionarLog("Push OK: " + MEU_USER_ID.slice(0, 8) + "...");
+      } catch (e) {
+        adicionarLog("Push nao disponivel: " + e.message);
+      }
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const raw = atob(base64);
+      return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+    }
+
+    async function notificarHost(hostUserId, sala) {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/enviar-chamada`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "apikey": SUPABASE_KEY },
+          body: JSON.stringify({ host_user_id: hostUserId, sala })
+        });
+        const data = await res.json();
+        adicionarLog(data.ok ? "Notificacao enviada ao host!" : "Push host: " + (data.error || "falhou"));
+      } catch (e) {
+        adicionarLog("Erro ao notificar host: " + e.message);
+      }
+    }
+
+    function tocarSomChamada() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const toca = (freq, inicio, duracao) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.value = freq;
+          osc.type = "sine";
+          gain.gain.setValueAtTime(0.3, ctx.currentTime + inicio);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + inicio + duracao);
+          osc.start(ctx.currentTime + inicio);
+          osc.stop(ctx.currentTime + inicio + duracao);
+        };
+        toca(880, 0, 0.3);
+        toca(880, 0.4, 0.3);
+        toca(660, 0.8, 0.5);
+      } catch (e) {
+        adicionarLog("Som nao suportado: " + e.message);
+      }
     }
   </script>
 </body>
