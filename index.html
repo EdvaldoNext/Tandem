@@ -60,6 +60,14 @@
       <p class="header-tagline">A um clique de distância, uma conexão direta.</p>
     </div>
 
+    <div class="contacts-box">
+      <div class="contacts-header">
+        <h2>Contatos</h2>
+        <button onclick="compartilharConvite()" class="btn-outline">+ Compartilhar meu contato</button>
+      </div>
+      <div id="listaContatos" class="contacts-list"></div>
+    </div>
+
     <div class="room-box">
       <h2>Entrar ou Criar Sala</h2>
       <input type="text" id="roomCode" placeholder="Código da Sala" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -67,7 +75,11 @@
         <button onclick="criarSala()" class="btn-primary">Gerar Código</button>
         <button onclick="entrarSala()" class="btn-primary">Entrar</button>
       </div>
-      <div id="linkCompartilhar">🔗 Link para enviar: <span id="linkTexto"></span></div>
+      <div id="linkCompartilhar">
+        <span class="link-label">🔗 Link para enviar:</span>
+        <span id="linkTexto"></span>
+        <button id="btnCopiarLink" class="btn-copy" onclick="copiarLink()" title="Copiar link">Copiar</button>
+      </div>
     </div>
 
     <div id="statusConexao" class="status desconectado">Aguardando código...</div>
@@ -103,6 +115,15 @@
   <script>
     const SUPABASE_URL = "https://epijxziihqnhwghiuuej.supabase.co";
     const SUPABASE_KEY = "sb_publishable_jhEJpUlCTOX6sDsyn5_z_w_6iLEoHFs";
+    const VAPID_PUBLIC_KEY = "BD9mfGMiW6uim_41FwYPNBEQ22bVcfsoHhHWmeetqaEziBm4RuHsvqHxmN7JC2gPWA7Rhfohg3I3SD5laUyZvC8";
+
+    let MEU_USER_ID = localStorage.getItem("tandem_user_id");
+    if (!MEU_USER_ID) {
+      MEU_USER_ID = crypto.randomUUID();
+      localStorage.setItem("tandem_user_id", MEU_USER_ID);
+    }
+
+    let MEU_NOME = localStorage.getItem("tandem_nome") || "";
 
     const PEER_ID = crypto.randomUUID();
     let localStream;
@@ -182,16 +203,44 @@
         adicionarLog("AVISO: Supabase inacessivel via HTTP - " + e.message);
       }
 
-      const parametroUrl = new URLSearchParams(window.location.search);
-      if (parametroUrl.get("sala")) {
-        codigoSala = parametroUrl.get("sala");
-        document.getElementById("roomCode").value = codigoSala;
-        adicionarLog("Entrando automaticamente: " + codigoSala);
-        entrarSala();
+      if (!MEU_NOME) {
+        const nome = prompt("Bem-vindo ao Tandem!\nQual e o seu nome? (usado para identificar chamadas)");
+        MEU_NOME = (nome || "Usuario").trim();
+        localStorage.setItem("tandem_nome", MEU_NOME);
       }
+      renderizarContatos();
 
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("service-worker.js").catch(() => {});
+        await navigator.serviceWorker.register("service-worker.js").catch(() => {});
+      }
+      await registrarPush();
+
+      const parametroUrl = new URLSearchParams(window.location.search);
+
+      if (parametroUrl.get("convite")) {
+        const convidadoId = parametroUrl.get("convite");
+        const convidadoNome = decodeURIComponent(parametroUrl.get("nome") || "Desconhecido");
+        const aceitar = confirm(`Adicionar "${convidadoNome}" como contato?`);
+        if (aceitar) {
+          const contatos = JSON.parse(localStorage.getItem("tandem_contatos") || "[]");
+          const jaExiste = contatos.some((c) => c.userId === convidadoId);
+          if (!jaExiste) {
+            contatos.push({ nome: convidadoNome, userId: convidadoId });
+            localStorage.setItem("tandem_contatos", JSON.stringify(contatos));
+            adicionarLog("Contato adicionado: " + convidadoNome);
+          } else {
+            adicionarLog("Contato ja existe: " + convidadoNome);
+          }
+          renderizarContatos();
+        }
+        history.replaceState(null, "", window.location.pathname);
+      } else if (parametroUrl.get("sala")) {
+        codigoSala = parametroUrl.get("sala");
+        document.getElementById("roomCode").value = codigoSala;
+        const hostId = parametroUrl.get("host");
+        if (hostId) window._hostParaNotificar = hostId;
+        adicionarLog("Entrando automaticamente: " + codigoSala);
+        entrarSala();
       }
     };
 
@@ -214,9 +263,9 @@
       document.getElementById("roomCode").value = codigoSala;
       souCriador = true;
 
-      const linkCompleto = `${window.location.origin}${window.location.pathname}?sala=${codigoSala}`;
+      const linkCompleto = `${window.location.origin}${window.location.pathname}?sala=${codigoSala}&host=${MEU_USER_ID}`;
       document.getElementById("linkTexto").innerText = linkCompleto;
-      document.getElementById("linkCompartilhar").style.display = "block";
+      document.getElementById("linkCompartilhar").style.display = "flex";
 
       adicionarLog("Sala criada: " + codigoSala);
       atualizarStatus("Sala criada - aguardando parceiro...", "conectando");
@@ -268,6 +317,7 @@
           const usuarios = Object.keys(canalTempoReal.presenceState());
           adicionarLog("Usuarios na sala: " + usuarios.length);
           if (souCriador && usuarios.length >= 2) {
+            tocarSomChamada();
             iniciarNegociacao();
           }
         })
@@ -279,6 +329,9 @@
             await canalTempoReal.track({ role: souCriador ? "host" : "guest" });
             if (!souCriador) {
               await enviarDados({ tipo: "join", de: PEER_ID });
+              if (window._hostParaNotificar) {
+                notificarHost(window._hostParaNotificar, codigoSala);
+              }
             }
           } else if (status === "CHANNEL_ERROR") {
             const msg = err ? (err.message || JSON.stringify(err)) : "sem detalhes";
@@ -532,6 +585,158 @@
       if (localStream) localStream.getTracks().forEach((t) => t.stop());
       if (canalTempoReal) supabaseClient.removeChannel(canalTempoReal);
       location.reload();
+    }
+
+    function copiarLink() {
+      const link = document.getElementById("linkTexto").innerText;
+      if (!link) return;
+      navigator.clipboard.writeText(link).then(() => {
+        const btn = document.getElementById("btnCopiarLink");
+        btn.innerText = "Copiado!";
+        setTimeout(() => { btn.innerText = "Copiar"; }, 2000);
+      }).catch(() => {
+        prompt("Copie o link abaixo:", link);
+      });
+    }
+
+    function renderizarContatos() {
+      const lista = document.getElementById("listaContatos");
+      const contatos = JSON.parse(localStorage.getItem("tandem_contatos") || "[]");
+      if (contatos.length === 0) {
+        lista.innerHTML = '<p class="contacts-empty">Nenhum contato. Compartilhe seu link para adicionar.</p>';
+        return;
+      }
+      lista.innerHTML = contatos.map((c, i) => `
+        <div class="contact-card">
+          <div class="contact-avatar">${c.nome.charAt(0).toUpperCase()}</div>
+          <span class="contact-name">${c.nome}</span>
+          <button class="btn-call" onclick="ligarParaContato(${i})">Ligar</button>
+          <button class="btn-remove" onclick="removerContato(${i})" title="Remover">x</button>
+        </div>
+      `).join("");
+    }
+
+    function compartilharConvite() {
+      const nomeEncoded = encodeURIComponent(MEU_NOME);
+      const link = `${window.location.origin}${window.location.pathname}?convite=${MEU_USER_ID}&nome=${nomeEncoded}`;
+      navigator.clipboard.writeText(link).then(() => {
+        alert("Link copiado!\nEnvie para a pessoa que deseja adicionar como contato.");
+      }).catch(() => {
+        prompt("Copie o link abaixo:", link);
+      });
+    }
+
+    function removerContato(indice) {
+      const contatos = JSON.parse(localStorage.getItem("tandem_contatos") || "[]");
+      const nome = contatos[indice]?.nome;
+      if (confirm(`Remover "${nome}" dos contatos?`)) {
+        contatos.splice(indice, 1);
+        localStorage.setItem("tandem_contatos", JSON.stringify(contatos));
+        renderizarContatos();
+      }
+    }
+
+    async function ligarParaContato(indice) {
+      const contatos = JSON.parse(localStorage.getItem("tandem_contatos") || "[]");
+      const contato = contatos[indice];
+      if (!contato) return;
+
+      const ids = [MEU_USER_ID, contato.userId].sort();
+      codigoSala = "tandem-" + ids[0].slice(0, 8) + "-" + ids[1].slice(0, 8);
+      souCriador = true;
+      document.getElementById("roomCode").value = codigoSala;
+
+      adicionarLog("Ligando para " + contato.nome + "...");
+      atualizarStatus("Aguardando " + contato.nome + "...", "conectando");
+
+      await iniciarMidia();
+      await iniciarCanalTempoReal();
+      await notificarContato(contato.userId, codigoSala, MEU_NOME);
+    }
+
+    async function notificarContato(contatoUserId, sala, nomeChamador) {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/enviar-chamada`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "apikey": SUPABASE_KEY },
+          body: JSON.stringify({ host_user_id: contatoUserId, sala, nome_chamador: nomeChamador })
+        });
+        const data = await res.json();
+        adicionarLog(data.ok ? "Notificacao enviada!" : "Push falhou: " + (data.error || "erro"));
+      } catch (e) {
+        adicionarLog("Erro ao notificar: " + e.message);
+      }
+    }
+
+    async function registrarPush() {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+      try {
+        const permissao = await Notification.requestPermission();
+        if (permissao !== "granted") {
+          adicionarLog("Permissao de notificacao negada");
+          return;
+        }
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+          });
+        }
+        await supabaseClient.from("push_subscriptions").upsert({
+          user_id: MEU_USER_ID,
+          subscription: sub.toJSON(),
+          updated_at: new Date().toISOString()
+        });
+        adicionarLog("Push OK: " + MEU_USER_ID.slice(0, 8) + "...");
+      } catch (e) {
+        adicionarLog("Push nao disponivel: " + e.message);
+      }
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const raw = atob(base64);
+      return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+    }
+
+    async function notificarHost(hostUserId, sala) {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/enviar-chamada`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "apikey": SUPABASE_KEY },
+          body: JSON.stringify({ host_user_id: hostUserId, sala })
+        });
+        const data = await res.json();
+        adicionarLog(data.ok ? "Notificacao enviada ao host!" : "Push host: " + (data.error || "falhou"));
+      } catch (e) {
+        adicionarLog("Erro ao notificar host: " + e.message);
+      }
+    }
+
+    function tocarSomChamada() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const toca = (freq, inicio, duracao) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.value = freq;
+          osc.type = "sine";
+          gain.gain.setValueAtTime(0.3, ctx.currentTime + inicio);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + inicio + duracao);
+          osc.start(ctx.currentTime + inicio);
+          osc.stop(ctx.currentTime + inicio + duracao);
+        };
+        toca(880, 0, 0.3);
+        toca(880, 0.4, 0.3);
+        toca(660, 0.8, 0.5);
+      } catch (e) {
+        adicionarLog("Som nao suportado: " + e.message);
+      }
     }
   </script>
 </body>

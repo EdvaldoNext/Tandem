@@ -1,46 +1,48 @@
-// service-worker.js
-// Funciona em segundo plano, como um funcionário que trabalha mesmo com a loja fechada
+self.addEventListener("push", (event) => {
+  let dados = {};
+  try {
+    dados = event.data ? event.data.json() : {};
+  } catch (_) {
+    dados = {};
+  }
 
-// 📢 Escuta quando o Sistema Operacional (Android/iOS) manda um aviso
-self.addEventListener('push', (evento) => {
-  
-  const opcoesNotificacao = {
-    body: 'Seu amigo está te chamando! 📞',
-    icon: 'https://cdn-icons-png.flaticon.com/512/1059/1059177.png',
-    badge: 'https://cdn-icons-png.flaticon.com/512/1059/1059177.png',
-    
-    // 🔊 FAZ TOCAR E VIBRAR IGUAL UMA LIGAÇÃO REAL
-    sound: 'default', 
-    vibrate: [300, 150, 300, 150, 300, 150, 400], // Padrão de vibração
+  const sala = dados.sala || "";
+  const nome = dados.nome || "Alguem";
+  const opcoes = {
+    body: `Chamada de ${nome}. Toque para atender.`,
+    icon: "/favicon.svg",
+    badge: "/favicon.svg",
+    vibrate: [300, 150, 300, 150, 300, 150, 400],
     renotify: true,
-    tag: 'chamada-recebida', // Agrupa notificações da mesma chamada
-
-    // 📍 Dados para saber qual sala abrir ao clicar
-    data: {
-      url: self.location.origin // O endereço do seu site
-    }
+    tag: "chamada-recebida",
+    requireInteraction: true,
+    data: { sala },
+    actions: [
+      { action: "atender", title: "Atender" },
+      { action: "recusar", title: "Recusar" }
+    ]
   };
 
-  // Mostra na tela de bloqueio e barra de notificações
-  evento.waitUntil(
-    self.registration.showNotification('📞 Chamada P2P', opcoesNotificacao)
-  );
+  event.waitUntil(self.registration.showNotification("Chamada Tandem", opcoes));
 });
 
-// 🖱️ O que acontece quando o usuário CLICA na notificação
-self.addEventListener('notificationclick', (evento) => {
-  evento.notification.close(); // Fecha o aviso
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
 
-  // ✅ ABRE O SITE E JÁ DIRECIONA PARA A SALA CORRETA
-  // Pega o código da sala salvo no armazenamento
-  evento.waitUntil(
-    clients.openWindow(`${evento.notification.data.url}?sala=${localStorage.getItem('salaAtual') || ''}`)
+  if (event.action === "recusar") return;
+
+  const sala = event.notification.data?.sala || "";
+  const url = self.registration.scope + (sala ? "?sala=" + sala : "");
+
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((lista) => {
+      for (const client of lista) {
+        if (client.url.startsWith(self.registration.scope) && "focus" in client) {
+          if (sala) client.navigate(url);
+          return client.focus();
+        }
+      }
+      return clients.openWindow(url);
+    })
   );
 });
-
-// Armazenamento local dentro do Service Worker
-// (simulamos aqui pois o SW tem escopo próprio)
-var localStorage = {
-  getItem: function(chave) { return this[chave] || null; },
-  setItem: function(chave, valor) { this[chave] = valor; }
-};
